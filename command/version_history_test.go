@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/cli"
 	"github.com/openbao/openbao/version"
@@ -25,13 +26,26 @@ func testVersionHistoryCommand(tb testing.TB) (*cli.MockUi, *VersionHistoryComma
 }
 
 func TestVersionHistoryCommand_TableOutput(t *testing.T) {
+	t.Parallel()
+
 	client, closer := testVaultServer(t)
 	defer closer()
 
 	ui, cmd := testVersionHistoryCommand(t)
 	cmd.client = client
 
-	code := cmd.Run([]string{})
+	var code int
+	// The version history recording is asynchronous on server startup.
+	// Retry until the output contains the current version.
+	for range 10 {
+		code = cmd.Run([]string{})
+		if code == 0 && strings.Contains(ui.OutputWriter.String(), version.Version) {
+			break
+		}
+		ui.OutputWriter.Reset()
+		ui.ErrorWriter.Reset()
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	if expectedCode := 0; code != expectedCode {
 		t.Fatalf("expected %d to be %d: %s", code, expectedCode, ui.ErrorWriter.String())
@@ -49,6 +63,8 @@ func TestVersionHistoryCommand_TableOutput(t *testing.T) {
 }
 
 func TestVersionHistoryCommand_JsonOutput(t *testing.T) {
+	t.Parallel()
+
 	client, closer := testVaultServer(t)
 	defer closer()
 
@@ -65,7 +81,19 @@ func TestVersionHistoryCommand_JsonOutput(t *testing.T) {
 		t.Fatalf("expected format to be %q, actual %q", "json", format)
 	}
 
-	code := RunCustom(args, runOpts)
+	var code int
+	var stdoutBytes []byte
+	// The version history recording is asynchronous on server startup.
+	for range 10 {
+		stdout.Reset()
+		stderr.Reset()
+		code = RunCustom(args, runOpts)
+		stdoutBytes = stdout.Bytes()
+		if code == 0 && json.Valid(stdoutBytes) && strings.Contains(string(stdoutBytes), version.Version) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	if expectedCode := 0; code != expectedCode {
 		t.Fatalf("expected %d to be %d: %s", code, expectedCode, stderr.String())
@@ -74,8 +102,6 @@ func TestVersionHistoryCommand_JsonOutput(t *testing.T) {
 	if stderrString := stderr.String(); !strings.Contains(stderrString, versionTrackingWarning) {
 		t.Errorf("expected %q to contain %q", stderrString, versionTrackingWarning)
 	}
-
-	stdoutBytes := stdout.Bytes()
 
 	if !json.Valid(stdoutBytes) {
 		t.Fatalf("expected output %q to be valid JSON", stdoutBytes)

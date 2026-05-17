@@ -399,9 +399,11 @@ func (d *Runner) Start(ctx context.Context, addSuffix, forceLocalAddr bool) (*St
 		}
 		opts.RegistryAuth = base64.URLEncoding.EncodeToString(buf.Bytes())
 	}
-	resp, _ := d.DockerAPI.ImagePull(ctx, cfg.Image, opts)
-	if resp != nil {
-		_, _ = io.ReadAll(resp)
+	if !strings.Contains(cfg.Image, "Test_") {
+		resp, _ := d.DockerAPI.ImagePull(ctx, cfg.Image, opts)
+		if resp != nil {
+			_, _ = io.ReadAll(resp)
+		}
 	}
 
 	for vol, mtpt := range d.RunOptions.VolumeNameToMountPoint {

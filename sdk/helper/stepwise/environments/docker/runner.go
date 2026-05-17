@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"strings"
 
 	"github.com/moby/go-archive"
 	"github.com/moby/moby/api/types/container"
@@ -60,9 +61,14 @@ func (d *Runner) Start(ctx context.Context) (*container.InspectResponse, error) 
 	// Docker library, or if not found pull the matching image from docker hub. If
 	// not found on docker hub, returns an error. The response must be read in
 	// order for the local image.
-	if resp, err := d.dockerAPI.ImagePull(ctx, d.ContainerConfig.Image, docker.ImagePullOptions{}); err == nil {
-		if resp != nil {
-			_, _ = io.ReadAll(resp)
+	//
+	// We skip pulling if the image tag looks like a locally-generated test image
+	// (e.g. contains "Test_") to avoid registry errors.
+	if !strings.Contains(d.ContainerConfig.Image, "Test_") {
+		if resp, err := d.dockerAPI.ImagePull(ctx, d.ContainerConfig.Image, docker.ImagePullOptions{}); err == nil {
+			if resp != nil {
+				_, _ = io.ReadAll(resp)
+			}
 		}
 	}
 

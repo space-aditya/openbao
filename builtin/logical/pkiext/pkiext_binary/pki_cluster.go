@@ -15,7 +15,6 @@ import (
 	dockhelper "github.com/openbao/openbao/sdk/v2/helper/docker"
 	"github.com/openbao/openbao/sdk/v2/helper/testcluster"
 	"github.com/openbao/openbao/sdk/v2/helper/testcluster/docker"
-	"github.com/openbao/openbao/version"
 )
 
 type VaultPkiCluster struct {
@@ -33,7 +32,9 @@ func NewVaultPkiCluster(t *testing.T) *VaultPkiCluster {
 		ImageRepo: "quay.io/openbao/openbao",
 		// We're replacing the binary anyway, so we're not too particular about
 		// the docker image version tag.
-		ImageTag:    version.GetVersion().VersionNumber(),
+		// Using "latest" ensures we pull a valid base image even if the current
+		// version (e.g. 2.0.0-HEAD) isn't on the registry yet.
+		ImageTag:    "latest",
 		VaultBinary: binary,
 		ClusterOptions: testcluster.ClusterOptions{
 			VaultNodeConfig: &testcluster.VaultNodeConfig{

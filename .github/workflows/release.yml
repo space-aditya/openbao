@@ -20,7 +20,7 @@ on:
         type: boolean
 
       dodistrelease:
-        description: "Upload release artifacts"
+        description: "Create distribution release"
         required: true
         default: false
         type: boolean
@@ -28,14 +28,38 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 env:
-  GO_VERSION: "1.24"
+  DOCKER_CLI_EXPERIMENTAL: enabled
+
+  # SPDX/SBOM fixes
+  SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES: "true"
+  SYFT_GOLANG_SEARCH_REMOTE_LICENSES: "false"
+
+  GOMODCACHE: /home/runner/go/pkg/mod
+  SYFT_GOLANG_LOCAL_MOD_CACHE_DIR: /home/runner/go/pkg/mod
+
+  GOTOOLCHAIN: local
 
 jobs:
-  gorelease:
-    name: goreleaser
+  release-main:
+    name: release-main (${{ matrix.goos }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        goos:
+          - linux
+          - darwin
+          - windows
+          - freebsd
+          - openbsd
+          - netbsd
+
+    env:
+      GOOS: ${{ matrix.goos }}
 
     steps:
       - name: Checkout
@@ -46,62 +70,76 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
+          cache: true
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
 
-      - name: Setup Buildx
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      # Optional signing support.
+      # Fork-safe: skipped automatically when secrets are absent.
+      - name: GPG Import
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0
 
-      - name: Prepare Go dependencies
-        run: |
-          go mod tidy
-          go mod download
-          go mod vendor
+      - name: Verify Syft
+        run: syft version
 
-      - name: Verify licenses resolve
-        env:
-          SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES: "true"
-          SYFT_GOLANG_SEARCH_LOCAL_VENDOR_LICENSES: "true"
-          SYFT_GOLANG_SEARCH_REMOTE_LICENSES: "true"
-          SYFT_GOLANG_PROXY: "https://proxy.golang.org,direct"
-        run: |
-          syft dir:. -o spdx-json=sbom.spdx.json
+      - name: Go mod download
+        run: go mod download
 
-          echo "==== SPDX LICENSE CHECK ===="
-          jq '.packages[] | select(.licenseConcluded != "NOASSERTION") | {name, licenseConcluded}' sbom.spdx.json | head -50
+      - name: Show Syft env
+        run: |
+          echo "SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES=$SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES"
+          echo "SYFT_GOLANG_SEARCH_REMOTE_LICENSES=$SYFT_GOLANG_SEARCH_REMOTE_LICENSES"
+          echo "SYFT_GOLANG_LOCAL_MOD_CACHE_DIR=$SYFT_GOLANG_LOCAL_MOD_CACHE_DIR"
 
       - name: Run GoReleaser
         if: ${{ inputs.dogorelease }}
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          # SPDX / license detection
+          # SPDX/SBOM fixes
           SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES: "true"
-          SYFT_GOLANG_SEARCH_LOCAL_VENDOR_LICENSES: "true"
-          SYFT_GOLANG_SEARCH_REMOTE_LICENSES: "true"
-          SYFT_GOLANG_PROXY: "https://proxy.golang.org,direct"
+          SYFT_GOLANG_SEARCH_REMOTE_LICENSES: "false"
 
+          GOMODCACHE: /home/runner/go/pkg/mod
+          SYFT_GOLANG_LOCAL_MOD_CACHE_DIR: /home/runner/go/pkg/mod
+
+      - name: List dist artifacts
         run: |
-          EXTRA_ARGS=""
+          echo "==== DIST FILES ===="
+          find dist -type f | sort || true
 
-          if [[ "${{ inputs.nightly }}" == "true" ]]; then
-            EXTRA_ARGS="${EXTRA_ARGS} --nightly"
-          fi
-
-          goreleaser release \
-            --clean \
-            --skip=publish \
-            ${EXTRA_ARGS}
-
-      - name: Upload artifacts
-        if: ${{ inputs.dodistrelease }}
+      - name: Upload SBOMs
         uses: actions/upload-artifact@v4
         with:
-          name: release-artifacts
+          name: sbom-${{ matrix.goos }}
+          path: |
+            dist/*.spdx.json
+            dist/*.sbom
+            dist/**/*.spdx.json
+            dist/**/*.sbom
+          if-no-files-found: warn
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}
           path: |
             dist/*
+          if-no-files-found: warn

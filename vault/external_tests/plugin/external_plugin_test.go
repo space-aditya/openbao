@@ -349,11 +349,14 @@ func TestExternalPlugin_AuthMethod(t *testing.T) {
 				}, 20*time.Second, 10*time.Millisecond)
 				secretID := secret.Data["secret_id"].(string)
 
-				secret, err = client.Logical().Read("auth/" + pluginPath + "/role/role1/role-id")
-				if err != nil {
-					t.Fatal(err)
-				}
-				roleID := secret.Data["role_id"].(string)
+				var roleID string
+				require.EventuallyWithT(t, func(collect *assert.CollectT) {
+					var err error
+					secret, err = client.Logical().Read("auth/" + pluginPath + "/role/role1/role-id")
+					if assert.NoError(collect, err) && assert.NotNil(collect, secret) && assert.NotNil(collect, secret.Data) {
+						roleID = secret.Data["role_id"].(string)
+					}
+				}, 20*time.Second, 10*time.Millisecond)
 
 				// Login - expect SUCCESS
 				authMethod, err := approle.NewAppRoleAuth(

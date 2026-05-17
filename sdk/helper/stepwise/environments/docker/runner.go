@@ -60,12 +60,10 @@ func (d *Runner) Start(ctx context.Context) (*container.InspectResponse, error) 
 	// Docker library, or if not found pull the matching image from docker hub. If
 	// not found on docker hub, returns an error. The response must be read in
 	// order for the local image.
-	resp, err := d.dockerAPI.ImagePull(ctx, d.ContainerConfig.Image, docker.ImagePullOptions{})
-	if err != nil {
-		return nil, err
-	}
-	if resp != nil {
-		_, _ = io.ReadAll(resp)
+	if resp, err := d.dockerAPI.ImagePull(ctx, d.ContainerConfig.Image, docker.ImagePullOptions{}); err == nil {
+		if resp != nil {
+			_, _ = io.ReadAll(resp)
+		}
 	}
 
 	cfg := *d.ContainerConfig

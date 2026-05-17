@@ -1,6 +1,7 @@
 # Creates a GitHub Release.
 # Workflow is manually run.
 # Preselect branch or tag before running this workflow.
+
 name: release
 
 on:
@@ -11,98 +12,96 @@ on:
         required: true
         default: true
         type: boolean
+
       dogorelease:
         description: "Run goreleaser"
         required: true
         default: true
         type: boolean
+
       dodistrelease:
-        description: "Release distribution source tarball"
+        description: "Upload release artifacts"
         required: true
-        default: true
-        type: boolean
-      dodebrelease:
-        description: "Release DEB packages in APT repository"
-        required: true
-        default: true
-        type: boolean
-      dorpmrelease:
-        description: "Release RPM packages in YUM repository"
-        required: true
-        default: true
+        default: false
         type: boolean
 
 permissions:
   contents: write
-  id-token: write
   packages: write
 
+env:
+  GO_VERSION: "1.24"
+
 jobs:
-  release-main:
+  gorelease:
+    name: goreleaser
     runs-on: ubuntu-latest
-    env:
-      DOCKER_CLI_EXPERIMENTAL: "enabled"
-      SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES: "true"
-      SYFT_GOLANG_SEARCH_REMOTE_LICENSES: "true"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configure nightly build
-        if: inputs.nightly
-        run: |
-          git remote add upstream https://github.com/openbao/openbao
-          git fetch --all
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
 
-          for tag in $(git tag); do
-            if [[ "$tag" == *nightly* ]]; then
-              echo "Deleting $tag"
-              git tag --delete "$tag"
-            fi
-          done
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
 
-          nightly_tag="$(bash ./scripts/nightly_tag.sh)"
-          git tag "$nightly_tag"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Golang Setup
-        uses: ./.github/actions/set-up-go
-
-      - name: go-check
-        run: go version
-
-      # Supports syft/sbom generation
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action/download-syft@v0
 
-      - name: Verify Syft
-        run: syft version
-
-      - name: Generate SBOM (SPDX JSON)
+      - name: Prepare Go dependencies
         run: |
-          mkdir -p dist
+          go mod tidy
+          go mod download
+          go mod vendor
 
-          syft scan . \
-            -o spdx-json=dist/openbao.spdx.json
-
-      - name: Generate SBOM (CycloneDX JSON)
+      - name: Verify licenses resolve
+        env:
+          SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES: "true"
+          SYFT_GOLANG_SEARCH_LOCAL_VENDOR_LICENSES: "true"
+          SYFT_GOLANG_SEARCH_REMOTE_LICENSES: "true"
+          SYFT_GOLANG_PROXY: "https://proxy.golang.org,direct"
         run: |
-          syft scan . \
-            -o cyclonedx-json=dist/openbao.cdx.json
+          syft dir:. -o spdx-json=sbom.spdx.json
 
-      - name: Generate SBOM (Syft JSON)
+          echo "==== SPDX LICENSE CHECK ===="
+          jq '.packages[] | select(.licenseConcluded != "NOASSERTION") | {name, licenseConcluded}' sbom.spdx.json | head -50
+
+      - name: Run GoReleaser
+        if: ${{ inputs.dogorelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # SPDX / license detection
+          SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES: "true"
+          SYFT_GOLANG_SEARCH_LOCAL_VENDOR_LICENSES: "true"
+          SYFT_GOLANG_SEARCH_REMOTE_LICENSES: "true"
+          SYFT_GOLANG_PROXY: "https://proxy.golang.org,direct"
+
         run: |
-          syft scan . \
-            -o syft-json=dist/openbao.syft.json
+          EXTRA_ARGS=""
 
-      - name: List generated SBOMs
-        run: ls -lh dist/
+          if [[ "${{ inputs.nightly }}" == "true" ]]; then
+            EXTRA_ARGS="${EXTRA_ARGS} --nightly"
+          fi
 
-      - name: Upload SBOM artifacts
+          goreleaser release \
+            --clean \
+            --skip=publish \
+            ${EXTRA_ARGS}
+
+      - name: Upload artifacts
+        if: ${{ inputs.dodistrelease }}
         uses: actions/upload-artifact@v4
         with:
-          name: sbom-files
-          path: dist/*.json
-          retention-days: 7
+          name: release-artifacts
+          path: |
+            dist/*

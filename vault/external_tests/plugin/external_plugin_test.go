@@ -317,9 +317,9 @@ func TestExternalPlugin_AuthMethod(t *testing.T) {
 		// plugin process
 		for i := range 5 {
 			pluginPath := fmt.Sprintf("%s-%d", plugin.Name, i)
-			client := cluster.Cores[i].Client
 			t.Run(pluginPath, func(t *testing.T) {
 				t.Parallel()
+				client := cluster.Cores[i].Client
 				client.SetToken(cluster.RootToken)
 				// Enable
 				if err := client.Sys().EnableAuthWithOptions(pluginPath, &api.EnableAuthOptions{
@@ -364,22 +364,24 @@ func TestExternalPlugin_AuthMethod(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = client.Auth().Login(t.Context(), authMethod)
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.EventuallyWithT(t, func(collect *assert.CollectT) {
+					_, err = client.Auth().Login(t.Context(), authMethod)
+					require.NoError(collect, err)
+				}, 20*time.Second, 100*time.Millisecond)
 
 				// Renew
-				_, err = client.Auth().Token().RenewSelf(30)
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.EventuallyWithT(t, func(collect *assert.CollectT) {
+					_, err = client.Auth().Token().RenewSelf(30)
+					require.NoError(collect, err)
+				}, 20*time.Second, 100*time.Millisecond)
 
 				// Login - expect SUCCESS
-				resp, err := client.Auth().Login(t.Context(), authMethod)
-				if err != nil {
-					t.Fatal(err)
-				}
+				var resp *api.Secret
+				require.EventuallyWithT(t, func(collect *assert.CollectT) {
+					var err error
+					resp, err = client.Auth().Login(t.Context(), authMethod)
+					require.NoError(collect, err)
+				}, 20*time.Second, 100*time.Millisecond)
 
 				revokeToken := resp.Auth.ClientToken
 				// Revoke
@@ -410,6 +412,10 @@ func TestExternalPlugin_AuthMethod(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	// Give some time for the deregistration invalidation to propagate
+	// to standby nodes before the cluster is torn down.
+	time.Sleep(1 * time.Second)
 }
 
 // TestExternalPlugin_AuthMethodReload tests that we can use an external auth
